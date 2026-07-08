@@ -1,6 +1,8 @@
 # main.py
 from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import json
 import httpx
 import ollama
 from typing import List, Optional, Dict, Any
@@ -63,34 +65,51 @@ async def ingest_document(payload: IngestRequest):
             detail=f"Ingestion failed: {e}"
         )
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query")
 async def query_rag(payload: QueryRequest):
     """
-    Query the RAG system: performs semantic search on Qdrant and utilizes 
-    local LLM (qwen3-vl:8b) to synthesize an answer based on the context.
+    Query the RAG system: performs semantic search on Qdrant and streams
+    the answer from local LLM (qwen3-vl:8b) using SSE (Server-Sent Events).
     """
     try:
-        # Get answer
-        answer = rag_service.ask(payload.query)
-        # Get source documents for frontend transparency
+        # Get source documents ONCE (avoids duplicate embedding call)
         sources = rag_service.get_relevant_documents(payload.query, limit=3)
-        
-        # Format sources to remove embedding payload before returning to user
         formatted_sources = [
             {"id": s["id"], "content": s["content"], "category": s["category"], "similarity": s["similarity"]}
             for s in sources
         ]
-        
-        return QueryResponse(
-            success=True,
-            query=payload.query,
-            answer=answer,
-            sources=formatted_sources
+
+        async def event_generator():
+            # 1. Send sources immediately
+            yield f"data: {json.dumps({'event': 'sources', 'data': formatted_sources}, ensure_ascii=False)}\n\n"
+            
+            # 2. Stream LLM response (reuse already-fetched sources to avoid re-embedding)
+            try:
+                async for token in rag_service.ask_stream(payload.query, context_docs=sources):
+                    # Skip empty tokens (e.g. qwen3 thinking tokens)
+                    if not token:
+                        continue
+                    yield f"data: {json.dumps({'event': 'token', 'data': token}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'event': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
+            
+            # 3. Send done event
+            yield "data: {\"event\": \"done\"}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
         )
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Query processing failed: {e}"
+            detail=f"Query streaming setup failed: {e}"
         )
 
 @app.get("/health", response_model=HealthResponse)

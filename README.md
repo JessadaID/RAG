@@ -125,15 +125,22 @@ sequenceDiagram
     participant DB as Qdrant Vector DB
 
     User->>API: 1. POST /query (คำถามภาษาธรรมชาติ)
-    API->>RAG: 2. เรียกใช้ฟังก์ชัน ask(query)
-    RAG->>Ollama: 3. เรียก embeddings() แปลงคำถามเป็นเวกเตอร์
-    Ollama-->>RAG: คืนค่าเวกเตอร์คำถาม (1024-dim)
-    RAG->>DB: 4. เรียก query_points() ค้นหาเวกเตอร์ใกล้เคียง
-    DB-->>RAG: คืนค่า Chunk ข้อความที่สัมพันธ์กัน (Top 3)
-    RAG->>RAG: 5. ประกอบ Prompt (System Prompt + Context + Query)
-    RAG->>Ollama: 6. chat() ส่ง Prompt ให้ LLM (qwen3-vl:8b) สังเคราะห์คำตอบ
-    Note over Ollama: ประมวลผลคำตอบแบบ Local
-    Ollama-->>RAG: คืนค่าผลลัพธ์คำตอบข้อความดิบ
-    RAG-->>API: คืนค่า (คำตอบสรุป + แหล่งเอกสารอ้างอิง)
-    API-->>User: 7. คืนค่า JSON Response (success: True, answer, sources)
+    API->>RAG: 2. ดึงเอกสารอ้างอิง get_relevant_documents()
+    RAG->>Ollama: 3. แปลงคำถามเป็นเวกเตอร์ (Embeddings)
+    Ollama-->>RAG: คืนค่าเวกเตอร์ (1024 มิติ)
+    RAG->>DB: 4. ค้นหาใน Qdrant (Cosine Similarity)
+    DB-->>RAG: คืนค่าท่อนความรู้ที่เกี่ยวข้อง (Top 3 Chunks)
+    RAG-->>API: คืนค่ารายการแหล่งอ้างอิง (Formatted Sources)
+    API-->>User: 5. ทยอยส่ง Sources ทันทีผ่าน SSE (event: 'sources')
+    
+    API->>RAG: 6. เรียกใช้ ask_stream()
+    RAG->>Ollama: 7. ส่ง Prompt พร้อม Context (chat กับ LLM แบบ stream=True)
+    
+    loop ค่อยๆ ทยอยตอบทีละคำ (Token Streaming)
+        Ollama-->>RAG: คืนค่า Token ล่าสุด
+        RAG-->>API: คืนค่า Token ล่าสุด
+        API-->>User: 8. ทยอยส่งผลลัพธ์ผ่าน SSE (event: 'token')
+    end
+    
+    API-->>User: 9. ส่งสัญญาณสิ้นสุดสตรีม (event: 'done')
 ```

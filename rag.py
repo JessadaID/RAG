@@ -2,7 +2,7 @@
 import uuid
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from typing import List, Dict, Any
+from typing import List, Dict, Any, AsyncGenerator
 import ollama_utils
 from constants import QDRANT_URL, COLLECTION_NAME, VECTOR_DIMENSION
 
@@ -106,17 +106,51 @@ class RAG:
             context_text = "\n\n".join([doc["content"] for doc in context_docs])
             
         # 2. Build the system prompt
-        prompt = f"""
-        You are a knowledgeable and precise AI assistant. Answer the user's question using ONLY the provided context information.
-        If the answer cannot be determined from the context, say "I don't know".
-        Do not mention "context" or "retrieved documents" in your final answer.
+        prompt = f"""/no_think
+You are a knowledgeable and precise AI assistant. Answer the user's question using ONLY the provided context information.
+If the answer cannot be determined from the context, say "I don't know".
+Do not mention "context" or "retrieved documents" in your final answer.
 
-        CONTEXT INFORMATION:
-        {context_text}
+CONTEXT INFORMATION:
+{context_text}
 
-        USER QUESTION:
-        {query}
-        """
+USER QUESTION:
+{query}
+"""
         
         # 3. Call local LLM (Qwen) via ollama_utils
         return ollama_utils.generate_llm_response(prompt)
+
+    def _build_prompt(self, query: str, context_docs: List[Dict[str, Any]]) -> str:
+        """
+        Builds the LLM prompt from query and context documents.
+        """
+        if not context_docs:
+            context_text = "No relevant context found in database."
+        else:
+            context_text = "\n\n".join([doc["content"] for doc in context_docs])
+
+        return f"""/no_think
+You are a knowledgeable and precise AI assistant. Answer the user's question using ONLY the provided context information.
+If the answer cannot be determined from the context, say "I don't know".
+Do not mention "context" or "retrieved documents" in your final answer.
+
+CONTEXT INFORMATION:
+{context_text}
+
+USER QUESTION:
+{query}
+"""
+
+    def ask_stream(self, query: str, context_docs: List[Dict[str, Any]] = None) -> AsyncGenerator[str, None]:
+        """
+        Generates response chunks as an async generator.
+        Accepts optional pre-fetched context_docs to avoid duplicate embedding calls.
+        """
+        # 1. Use provided context or retrieve fresh
+        if context_docs is None:
+            context_docs = self.get_relevant_documents(query, limit=2)
+
+        # 2. Build prompt and stream from LLM
+        prompt = self._build_prompt(query, context_docs)
+        return ollama_utils.generate_llm_response_stream(prompt)

@@ -1,20 +1,24 @@
 # ask.py
 import sys
+import asyncio
 from rag import RAG
 
-def ask_question(question: str) -> None:
+async def ask_question(question: str) -> None:
     """
-    Convenience CLI tool to run the local RAG asking function.
+    Convenience CLI tool to run the local RAG asking function with streaming.
     """
     print(f"กำลังค้นหาคำตอบสำหรับคำถาม: '{question}'...")
     
     # Instantiate and ask
     rag = RAG()
-    response = rag.ask(question)
     
     print("\n=== คำตอบ (Response) ===")
-    print(response)
-    print("========================\n")
+    try:
+        async for token in rag.ask_stream(question):
+            print(token, end="", flush=True)
+    except Exception as e:
+        print(f"\n❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
+    print("\n========================\n")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -22,4 +26,4 @@ if __name__ == "__main__":
         sys.exit(1)
         
     user_question = sys.argv[1]
-    ask_question(user_question)
+    asyncio.run(ask_question(user_question))
