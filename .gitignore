@@ -2,3 +2,4 @@ CONTEXT.md
 SKILL.md
 .venv
 __pycache__
+.env
